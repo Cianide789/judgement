@@ -259,7 +259,7 @@ function applyLongDecay(eff, rawMin){
   return eff;
 }
 
-/**************** Gemini判定（メイン：400対策／JSON強制＋堅牢パース） ****************/
+/**************** Gemini判定（JSON強制・inlineData対応・安全ブロック表示・堅牢パース） ****************/
 async function judgeGemini(payload){
   ui.providerPill.textContent = '判定: Gemini 準備中';
 
@@ -276,62 +276,66 @@ async function judgeGemini(payload){
 `あなたは厳格な勉強効率の審査員です。家=1.00、他環境は0.30〜0.95で常識的に採点。
 明確に勉強ではない活動（YouTube/ゲーム/SNS/配信視聴など）が主なら効率は0.01に固定。
 長時間は逓減：${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下。
-必ず次のJSONのみを出力：{"efficiency":number,"confidence":number,"subscores":{"noise":number,"phone_risk":number,"task_active":number,"crowding":number,"fatigue":number},"rationale":string,"flags":{"contradiction":boolean,"duration_implausible":boolean,"needs_clarification":boolean}}`;
+必ず次のJSONのみを出力：{"efficiency":number,"confidence":number,"subscores":{"noise":number,"phone_risk":number,"task_active":number,"crowding":number,"fatigue":number},"rationale":string,"flags":{"contradiction":boolean,"duration_implausible":boolean,"needs_clarification":boolean}}
+余計な文章、コードブロック、Markdownは禁止。`;
 
-  // 共通のcontents（systemは専用フィールドに分離）
-  const baseBody = {
+  // v1beta generateContent 形式（systemInstructionを分離）
+  const body = {
     systemInstruction: { parts: [{ text: systemText }] },
-    contents: [{ role: 'user', parts: [{ text: userJson }]}]
-  };
-
-  // ① まずは snake_case（v1betaでよく通る）
-  const bodySnake = {
-    ...baseBody,
+    contents: [{ role: 'user', parts: [{ text: userJson }]}],
     generationConfig: {
-      temperature: 0.2,
-      max_output_tokens: 256,
-      response_mime_type: "application/json"
-      // response_schema は一部モデル/バージョンで400を返すためまず外す
-    }
-  };
-
-  // ② ダメなら camelCase で再試行
-  const bodyCamel = {
-    ...baseBody,
-    generationConfig: {
-      temperature: 0.2,
+      temperature: 0.0,
       maxOutputTokens: 256,
-      responseMimeType: "application/json"
+      responseMimeType: "application/json"   // ★JSON出力を強制
+      // responseSchema は一部モデルで400になり得るのでまずは未指定で安定化
     }
   };
 
-  async function callOnce(body){
+  async function callGemini(){
     const res = await fetch(`${CONFIG.GEMINI.URL}?key=${encodeURIComponent(CONFIG.GEMINI.KEY)}`, {
       method: 'POST',
       headers: { 'Content-Type':'application/json' },
       body: JSON.stringify(body)
     });
     if (!res.ok) {
-      const txt = await res.text().catch(()=> '');
-      throw new Error(`HTTP ${res.status}${txt?` | ${txt.slice(0,200)}`:''}`);
+      // 400/403/429などは本文もログに出す
+      const t = await res.text().catch(()=> '');
+      throw new Error(`HTTP ${res.status}${t ? ' | ' + t.slice(0,200) : ''}`);
     }
     return res.json();
   }
 
   try{
-    log('Geminiへ判定リクエスト（snake_case）');
-    let data;
-    try {
-      data = await callOnce(bodySnake);
-    } catch (e1) {
-      // 400などが出たらcamelCaseで再試行
-      log('Gemini snake_case失敗 -> camelCaseで再試行: ' + (e1?.message||e1));
-      data = await callOnce(bodyCamel);
+    log('Geminiへ判定リクエスト（JSON強制・inlineData対応）');
+    const data = await callGemini();
+
+    // --- 安全ブロックなどのメタ情報を拾っておく（デバッグに有用） ---
+    const pf = data?.promptFeedback;
+    const cand = data?.candidates?.[0];
+    const finish = cand?.finishReason;
+    if (pf?.blockReason) {
+      log(`Gemini安全ブロック: ${pf.blockReason}`);
+    }
+    if (finish && finish !== 'STOP') {
+      log(`Gemini finishReason: ${finish}`);
     }
 
-    // 期待する出力の取り出し
-    let text = data?.candidates?.[0]?.content?.parts?.find(p => typeof p.text === 'string')?.text?.trim() || '';
-    // JSON抽出（囲い/説明が混ざっても救済）
+    // --- 応答本文の取り出し：text だけでなく inlineData(JSON) も見る ---
+    let text = '';
+    const parts = cand?.content?.parts || [];
+    for (const p of parts){
+      if (typeof p.text === 'string' && p.text.trim()){
+        text = p.text.trim();
+        break;
+      }
+      // application/json が base64 で来るパターン
+      if (p.inlineData?.mimeType?.includes('json') && p.inlineData?.data){
+        text = base64JsonToText(p.inlineData.data);  // ★新規補助関数
+        break;
+      }
+    }
+
+    // --- 堅牢パース：素直なJSON → ```囲い → 本文から{...}抽出 → candidates全体から抽出 ---
     let parsed = parseMaybeJSON(text) || extractFirstJSON(text);
     if (!parsed && typeof data === 'object') {
       parsed = extractFirstJSON(JSON.stringify(data));
@@ -341,6 +345,8 @@ async function judgeGemini(payload){
       ui.providerPill.textContent = '判定: Gemini';
       return parsed;
     }
+
+    // ここまで来たらJSONを得られていない
     throw new Error('Gemini応答がJSONでない');
   }catch(e){
     log('Gemini判定失敗: '+(e?.message||e));
@@ -349,36 +355,16 @@ async function judgeGemini(payload){
   }
 }
 
-
-
-function parseMaybeJSON(t){
-  if (!t) return null;
-  let s = String(t).trim();
-  if (s.startsWith('```')) {
-    s = s.replace(/^```json/i,'').replace(/^```/,'').replace(/```$/,'').trim();
-  }
-  try { return JSON.parse(s); } catch { return null; }
+/********** base64(JSON) → UTF-8文字列（inlineData用） **********/
+function base64JsonToText(b64){
+  try{
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', {fatal:false}).decode(bytes);
+  }catch(_){ return ''; }
 }
-
-function extractFirstJSON(s){
-  if (!s) return null;
-  let depth = 0, start = -1;
-  for (let i=0; i<s.length; i++){
-    const ch = s[i];
-    if (ch === '{'){
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === '}'){
-      if (depth > 0) depth--;
-      if (depth === 0 && start !== -1){
-        const candidate = s.slice(start, i+1);
-        try { return JSON.parse(candidate); } catch {}
-        start = -1; // 次のブロック探す
-      }
-    }
-  }
-  return null;
-}
+</script>
 
 
 /**************** プレビュー ****************/
