@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>オフサイト勉強・審査フォーム | LLM判定版</title>
+<meta name="theme-color" content="#111111" />
+<style>
+  :root { color-scheme: light dark; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif; background: Canvas; color: CanvasText; }
+  header { padding: 12px 16px; border-bottom: 1px solid #ddd; position: sticky; top: 0; background: inherit; z-index: 2; }
+  main { padding: 16px; display: grid; gap: 16px; max-width: 980px; margin: 0 auto; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; background: inherit; }
+  label { display: block; margin-bottom: 6px; font-size: 14px; opacity: .9; }
+  input[type="text"], input[type="number"], input[type="datetime-local"], select, textarea { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #ccc; background: Field; color: FieldText; box-sizing: border-box; }
+  textarea { min-height: 96px; }
+  .grid { display: grid; gap: 12px; }
+  .grid.cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .grid.cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  @media (max-width: 720px){ .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; } }
+  button { padding: 12px 16px; border-radius: 10px; border: 1px solid #ccc; background: ButtonFace; color: ButtonText; font-size: 16px; cursor: pointer; }
+  .pill { padding: 6px 10px; border-radius: 999px; border: 1px solid #ccc; font-size: 13px; white-space: nowrap; }
+  .ok { background: #257c4b; border-color: #a3d8bf; color: #fff; }
+  .ng { background: #9f2121; border-color: #f2b7b7; color: #fff; }
+  .muted { opacity: .75; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  details > summary { cursor: pointer; }
+  .right { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .note { font-size: 12px; opacity: .85; }
+  .warn { color: #b51e1e; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 160px 1fr; gap: 6px 10px; align-items: start; }
+  @media (max-width: 520px){ .kv { grid-template-columns: 1fr; } }
+  #todayLock { flex: 0 1 180px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <strong>オフサイト勉強・審査フォーム（LLM判定）</strong>
+    <span id="status" class="pill ng">未送信</span>
+    <span id="todayLock" class="pill">本日送信: 0/1</span>
+    <span id="providerPill" class="pill">判定: 未選択</span>
+  </div>
+</header>
+
+<main>
+  <section class="card" aria-labelledby="sec-input">
+    <h3 id="sec-input" style="margin:0 0 12px;">1) 入力</h3>
+    <div class="grid cols-2">
+      <div>
+        <label for="start">勉強日時（開始）</label>
+        <input id="start" type="datetime-local" />
+      </div>
+      <div>
+        <label for="end">勉強日時（終了）</label>
+        <input id="end" type="datetime-local" />
+      </div>
+      <div>
+        <label for="category">場所カテゴリ</label>
+        <select id="category">
+          <option value="library">図書館</option>
+          <option value="school_room">学校の自習室</option>
+          <option value="cram_class">塾（授業）</option>
+          <option value="cram_self">塾（自習）</option>
+          <option value="cafe">カフェ</option>
+          <option value="train">電車・バス</option>
+          <option value="park">公園・屋外</option>
+          <option value="study_group">グループ学習</option>
+          <option value="other">その他（自由入力）</option>
+        </select>
+        <input id="categoryOther" type="text" placeholder="その他の場合はこちらに入力" style="margin-top:6px; display:none;" />
+      </div>
+      <div>
+        <label for="rawMinutes">実時間（分）</label>
+        <input id="rawMinutes" type="number" min="1" step="1" placeholder="例: 300" required />
+      </div>
+      <div class="grid cols-1" style="grid-column:1/-1;">
+        <label for="memo">状況メモ（自由記述。静音/混雑、スマホの扱い、学習内容、体調など）</label>
+        <textarea id="memo" placeholder="例: 模試復習、スマホはロッカー、耳栓、周囲は静か、集中度高め"></textarea>
+      </div>
+    </div>
+    <div class="right">
+      <button id="estimateBtn">AI判定プレビュー</button>
+    </div>
+    <div class="note">ポリシー: 家効率=1.00を基準にし、他の環境は常識的に減点。長時間は逓減。<br/>丸めは<strong>5分切り捨て</strong>、換算効率の上限<strong>0.95</strong>/下限<strong>0.30</strong>、1日1件。</div>
+  </section>
+
+  <section class="card" aria-labelledby="sec-judge">
+    <h3 id="sec-judge" style="margin:0 0 12px;">2) 判定</h3>
+    <div class="kv mono">
+      <div class="muted">推定効率（家=1.0）</div><div id="eff">—</div>
+      <div class="muted">確信度</div><div id="conf">—</div>
+      <div class="muted">換算結果（家での勉強分）</div><div id="conv">—</div>
+      <div class="muted">根拠（要約）</div><div id="rationale">—</div>
+      <div class="muted">サブスコア</div><div id="subs">—</div>
+      <div class="muted">フラグ</div><div id="flags">—</div>
+      <div class="muted">使用プロバイダ</div><div id="provider">—</div>
+    </div>
+    <div class="right" style="margin-top:12px;">
+      <button id="submitBtn" disabled>送信（GASへ反映）</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>設定とルーブリック</summary>
+      <div class="mono" id="rulesDump" style="white-space:pre-wrap"></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h3 style="margin:0 0 12px;">ログ</h3>
+    <div id="log" class="mono" style="white-space:pre-wrap; opacity:.9;">—</div>
+  </section>
+</main>
+
+<script>
+/**************** 設定（必要に応じて編集） ****************/
+const CONFIG = {
+  GAS_ENDPOINT: "https://script.google.com/macros/s/AKfycbxSKxU69qmqFnnrbkHkvi19mbJ0Wa9KXlF-1QjymGtf0vOHC0fR6i-IO1qqFy8q6pmZ/exec",
+  USE_WEBLLM: true,                 // WebGPUでブラウザ内推論（無料運用）
+  USE_OLLAMA_FALLBACK: true,        // ローカルOllamaにフォールバック
+  OLLAMA: { url: "http://127.0.0.1:11434/api/generate", model: "qwen2.5:3b-instruct" },
+  MODEL_WEBLLM: {
+    model_id: "Qwen2.5-1.5B-Instruct-q4f32_1-MLC", // 軽量で日本語OK
+    // 候補: "Phi-3-mini-4k-instruct-q4f32_1-MLC", "qwen2.5-3b-instruct-q4f32_1-MLC"
+  },
+  LIMITS: { EFF_MIN: 0.30, EFF_MAX: 0.95 },
+  ROUND_MIN: 5,                     // 5分切り捨て
+  DAILY_LIMIT: 1,                   // 1日1件
+  LONG_DECAY: { THRESH_MIN: 120, STEP_MIN: 30, STEP_PENALTY: 0.02 }, // 120分超で30分毎-0.02
+  CONF_PENALTY: { THRESH: 0.60, PENALTY: 0.03 }, // 確信度が低い場合の微減点
+  USER_FACTOR: { key: "offsite_user_k", init: 1.00, min: 0.90, max: 1.10 },
+};
+
+const RUBRIC = {
+  baseByCategory: {
+    library:     0.70,
+    school_room: 0.80,
+    cram_class:  0.90,
+    cram_self:   0.75,
+    cafe:        0.55,
+    train:       0.45,
+    park:        0.50,
+    study_group: 0.65,
+    other:       0.60,
+  },
+  aspects: [
+    "騒音/静音・混雑", "デジタル干渉(スマホ/通知)", "能動度(演習/復習/記述)", "姿勢/移動", "体調/疲労", "例外的に密度が高い学習(模試復習など)"
+  ],
+  schema: {
+    efficiency: "0.30〜0.95の実数。家=1.00を超えない。",
+    confidence: "0.0〜1.0。曖昧/矛盾があると低下。",
+    subscores: { noise: "0〜1", phone_risk: "0〜1", task_active: "0〜1", crowding: "0〜1", fatigue: "0〜1" },
+    rationale: "日本語で端的に。",
+    flags: { contradiction: "bool", duration_implausible: "bool", needs_clarification: "bool" }
+  }
+};
+
+/**************** UI参照 ****************/
+const ui = {
+  start: document.getElementById('start'),
+  end: document.getElementById('end'),
+  category: document.getElementById('category'),
+  categoryOther: document.getElementById('categoryOther'),
+  rawMinutes: document.getElementById('rawMinutes'),
+  memo: document.getElementById('memo'),
+  estimateBtn: document.getElementById('estimateBtn'),
+  submitBtn: document.getElementById('submitBtn'),
+  eff: document.getElementById('eff'),
+  conf: document.getElementById('conf'),
+  conv: document.getElementById('conv'),
+  rationale: document.getElementById('rationale'),
+  subs: document.getElementById('subs'),
+  flags: document.getElementById('flags'),
+  provider: document.getElementById('provider'),
+  status: document.getElementById('status'),
+  todayLock: document.getElementById('todayLock'),
+  providerPill: document.getElementById('providerPill'),
+  rulesDump: document.getElementById('rulesDump'),
+  log: document.getElementById('log'),
+};
+
+ui.rulesDump.textContent = `CONFIG = ${JSON.stringify(CONFIG, null, 2)}\n\nRUBRIC = ${JSON.stringify(RUBRIC, null, 2)}`;
+
+/**************** 日次制限 ****************/
+const todayKey = (()=>{ const d=new Date(); const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return `offsiteSubmit:${yyyy}-${mm}-${dd}`; })();
+function updateDailyLock(){ const sent = Number(localStorage.getItem(todayKey) || 0); ui.todayLock.textContent = `本日送信: ${sent}/${CONFIG.DAILY_LIMIT}`; return sent; }
+updateDailyLock();
+
+/**************** ログ & 小物 ****************/
+function log(s){ ui.log.textContent = (ui.log.textContent==='—'?'':ui.log.textContent) + `[${new Date().toLocaleTimeString()}] ${s}\n`; }
+function setStatus(ok, text){ ui.status.textContent = text; ui.status.className = 'pill ' + (ok?'ok':'ng'); }
+function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+function floorTo(n, step){ return Math.floor(n/step)*step; }
+function mmToHHMM(m){ const h=Math.floor(m/60); const mm=Math.floor(m%60); return `${h}時間${String(mm).padStart(2,'0')}分`; }
+
+/**************** 個人補正 (k_user) ****************/
+function getUserFactor(){ const k = Number(localStorage.getItem(CONFIG.USER_FACTOR.key) || CONFIG.USER_FACTOR.init); return clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max); }
+function setUserFactor(k){ localStorage.setItem(CONFIG.USER_FACTOR.key, String(clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max))); }
+if (!localStorage.getItem(CONFIG.USER_FACTOR.key)) setUserFactor(CONFIG.USER_FACTOR.init);
+
+/**************** プロバイダ初期化 ****************/
+let webllmEngine = null; let providerName = 'rule';
+ui.providerPill.textContent = '判定: ルール/LLM自動';
+
+async function ensureWebLLM(){
+  if (!CONFIG.USE_WEBLLM) return null;
+  if (webllmEngine) return webllmEngine;
+  try{
+    log('WebLLM読込中…');
+    await loadScriptTry([
+      'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/dist/web-llm.min.js',
+      'https://esm.run/@mlc-ai/web-llm'
+    ]);
+    if (!window.webllm && window.WebLLM) window.webllm = window.WebLLM;
+    if (!window.webllm){ throw new Error('WebLLM未ロード'); }
+    const { CreateWebWorkerMLCEngine } = window.webllm;
+    webllmEngine = await CreateWebWorkerMLCEngine(CONFIG.MODEL_WEBLLM.model_id, {
+      initProgressCallback: (p)=>{ ui.providerPill.textContent = `判定: WebLLM 準備中 ${(p?.progress??0)*100|0}%`; },
+      logLevel: 'error'
+    });
+    providerName = 'webllm'; ui.providerPill.textContent = '判定: WebLLM'; log('WebLLM準備OK');
+    return webllmEngine;
+  }catch(e){ log('WebLLM初期化失敗: '+(e?.message||e)); return null; }
+}
+
+async function loadScriptTry(urls){
+  let lastErr; for (const src of urls){ try{ await new Promise((res, rej)=>{ const s=document.createElement('script'); s.src=src; s.defer=true; s.onload=res; s.onerror=()=>rej(new Error('load failed: '+src)); document.head.appendChild(s); }); log('loaded: '+src); return; }catch(e){ lastErr=e; log('CDN load error: '+src);} } throw lastErr||new Error('all CDN failed');
+}
+
+/**************** ルールベース（フォールバック & 比較用） ****************/
+function judgeRule(category, rawMinutes, memo){
+  let eff = RUBRIC.baseByCategory[category] ?? RUBRIC.baseByCategory.other;
+  const text=(memo||'').toLowerCase();
+  const mods=[
+    {keys:['静か','耳栓','ノイズキャンセリング','個室','自習室','仕切り'], d:+0.05},
+    {keys:['満席','混雑','うるさい','騒音','雑音','子供'], d:-0.10},
+    {keys:['スマホ','youtube','sns','line','通知'], d:-0.20},
+    {keys:['引き出し','機内モード','電源オフ','通知オフ','ロッカー'], d:+0.05},
+    {keys:['集中','没頭','ゾーン'], d:+0.05},
+    {keys:['眠い','寝不足','疲れ','だるい'], d:-0.10},
+    {keys:['模試復習','過去問','演習','記述','答案','アウトプット'], d:+0.05},
+    {keys:['授業','講義','講習'], d:0},
+    {keys:['友達','ペア','ディスカッション','質問対応'], d:-0.05},
+    {keys:['暗記','リスニング','読み流し'], d:-0.05},
+    {keys:['良い席','角席','壁際'], d:+0.03},
+    {keys:['立ち見','立って','移動中'], d:-0.05},
+  ];
+  const reasons=[`カテゴリ基準=${eff.toFixed(2)}`];
+  for (const m of mods){ if (m.keys.some(k=>text.includes(k.toLowerCase()))){ eff+=m.d; reasons.push(`${m.d>0?'+':''}${m.d.toFixed(2)}`); } }
+  eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
+  eff = applyLongDecay(eff, rawMinutes);
+  return { efficiency: eff, confidence: 0.65, subscores: {}, rationale: reasons.join(' / '), flags: {} };
+}
+
+function applyLongDecay(eff, rawMin){
+  const { THRESH_MIN, STEP_MIN, STEP_PENALTY } = CONFIG.LONG_DECAY;
+  if (rawMin > THRESH_MIN){
+    const extra = rawMin - THRESH_MIN; const steps = Math.floor(extra / STEP_MIN); eff -= steps * STEP_PENALTY; eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
+  }
+  return eff;
+}
+
+/**************** LLM判定 ****************/
+async function judgeLLM(payload){
+  // 1) WebLLM（ブラウザ内）
+  const eng = await ensureWebLLM();
+  if (eng){
+    try{
+      const messages = buildMessages(payload);
+      const out = await eng.chat.completions.create({ messages, temperature: 0.2, max_tokens: 256 });
+      const txt = out?.choices?.[0]?.message?.content || '';
+      const js = parseMaybeJSON(txt);
+      if (js && typeof js.efficiency === 'number') { providerName='webllm'; return js; }
+      throw new Error('WebLLM応答がJSONでない');
+    }catch(e){ log('WebLLM判定失敗: '+(e?.message||e)); }
+  }
+  // 2) Ollama（ローカル）
+  if (CONFIG.USE_OLLAMA_FALLBACK){
+    try{
+      const body = { model: CONFIG.OLLAMA.model, stream: false, prompt: buildSinglePrompt(payload) };
+      const res = await fetch(CONFIG.OLLAMA.url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const j = await res.json();
+      const js = parseMaybeJSON(j?.response||'');
+      if (js && typeof js.efficiency === 'number') { providerName='ollama'; return js; }
+      throw new Error('Ollama応答がJSONでない');
+    }catch(e){ log('Ollama判定失敗: '+(e?.message||e)); }
+  }
+  // 3) ルールへフォールバック
+  providerName='rule';
+  return judgeRule(payload.category_id, payload.raw_minutes, payload.memo||'');
+}
+
+function buildMessages(p){
+  const system = `あなたは勉強効率の審査員です。家での学習効率を1.00とし、他の環境の効率を0.30〜0.95で常識的に採点します。下記ルーブリックに従い、JSONのみで出力してください。長時間は逓減（${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下）。家を超える判定は不可。\nルーブリック: ${JSON.stringify(RUBRIC.baseByCategory)} / 観点: ${RUBRIC.aspects.join('、')}\n出力スキーマ: {"efficiency":number,"confidence":number,"subscores":{"noise":number,"phone_risk":number,"task_active":number,"crowding":number,"fatigue":number},"rationale":string,"flags":{"contradiction":boolean,"duration_implausible":boolean,"needs_clarification":boolean}}`;
+  const user = JSON.stringify({ category_id:p.category_id, category_label:p.category_label, raw_minutes:p.raw_minutes, start:p.start, end:p.end, memo:p.memo });
+  return [{ role:'system', content: system }, { role:'user', content: user }];
+}
+
+function buildSinglePrompt(p){
+  return `あなたは勉強効率の審査員。家=1.00。${CONFIG.LIMITS.EFF_MIN}〜${CONFIG.LIMITS.EFF_MAX}で採点。${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下。JSONのみで返答。\n入力:${JSON.stringify({category_id:p.category_id, category_label:p.category_label, raw_minutes:p.raw_minutes, start:p.start, end:p.end, memo:p.memo})}\n出力例:{"efficiency":0.72,"confidence":0.83,"subscores":{"noise":0.8,"phone_risk":0.3,"task_active":0.85,"crowding":0.6,"fatigue":0.55},"rationale":"…","flags":{"contradiction":false,"duration_implausible":false,"needs_clarification":false}}`;
+}
+
+function parseMaybeJSON(t){
+  if (!t) return null; let s = String(t).trim();
+  if (s.startsWith('```')){ s = s.replace(/^```json/,'').replace(/^```/,'').replace(/```$/,'').trim(); }
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/**************** 入力補助（その他表示切替） ****************/
+ui.category.addEventListener('change', ()=>{
+  if (ui.category.value === 'other') { ui.categoryOther.style.display = 'block'; }
+  else { ui.categoryOther.style.display = 'none'; ui.categoryOther.value=''; }
+});
+
+/**************** プレビュー ****************/
+ui.estimateBtn.addEventListener('click', async ()=>{
+  const raw = Number(ui.rawMinutes.value || 0); if (!raw || raw<=0){ alert('実時間（分）を入力してください'); return; }
+  const catId = ui.category.value; const catLabel = (catId==='other' ? (ui.categoryOther.value.trim()||'その他') : ui.category.options[ui.category.selectedIndex].text);
+  const memo = ui.memo.value.trim();
+  const st = ui.start.value||null, en = ui.end.value||null;
+  if (st && en && new Date(en) <= new Date(st)){ alert('終了は開始より後にしてください'); return; }
+
+  setStatus(true, '判定中…'); ui.provider.textContent='—'; ui.submitBtn.disabled=true;
+  log('LLMへ判定リクエスト');
+  const payload = { category_id:catId, category_label:catLabel, raw_minutes:raw, memo, start:st, end:en };
+
+  let result = await judgeLLM(payload);
+  // クリップと逓減（LLMが返しても最終防衛）
+  let eff = Number(result.efficiency||0); eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX); eff = applyLongDecay(eff, raw);
+  // 確信度ペナルティ
+  const conf = Number(result.confidence||0);
+  if (isFinite(conf) && conf < CONFIG.CONF_PENALTY.THRESH){ eff = clamp(eff - CONFIG.CONF_PENALTY.PENALTY, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX); }
+  // 個人補正
+  const k = getUserFactor(); eff = clamp(eff * k, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
+
+  const converted = floorTo(raw * eff, CONFIG.ROUND_MIN);
+
+  // 表示
+  ui.eff.textContent = eff.toFixed(2);
+  ui.conf.textContent = (isFinite(conf)? conf.toFixed(2) : '—');
+  ui.conv.textContent = `${converted} 分（${mmToHHMM(converted)}）`;
+  ui.rationale.textContent = result.rationale || '—';
+  const subs = result.subscores || {}; ui.subs.textContent = Object.keys(subs).length? JSON.stringify(subs) : '—';
+  const flags = result.flags || {}; ui.flags.textContent = Object.keys(flags).length? JSON.stringify(flags) : '—';
+  ui.provider.textContent = providerName;
+  ui.providerPill.textContent = '判定: ' + (providerName==='webllm'?'WebLLM':providerName==='ollama'?'Ollama':'ルール');
+
+  ui.submitBtn.disabled = false; setStatus(true, '判定OK（未送信）');
+  log(`判定完了: eff=${eff.toFixed(2)}, conf=${isFinite(conf)?conf.toFixed(2):'—'}, conv=${converted}分, provider=${providerName}`);
+});
+
+/**************** 送信（重複防止＋冪等化） ****************/
+let isSubmitting = false;
+function genId(){
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8);
+}
+
+ui.submitBtn.addEventListener('click', async ()=>{
+  if (isSubmitting) { log('重複送信ブロック'); return; }
+  if (updateDailyLock() >= CONFIG.DAILY_LIMIT){ alert('本日は既に送信されています（1日1件まで）'); return; }
+  const convText = ui.conv.textContent; const convMin = Number((convText.match(/^(\d+)/)||[])[1]||0);
+  if (!convMin){ alert('先に「AI判定プレビュー」を行ってください'); return; }
+
+  const raw = Number(ui.rawMinutes.value||0);
+  const catId = ui.category.value; const catLabel = (catId==='other' ? (ui.categoryOther.value.trim()||'その他') : ui.category.options[ui.category.selectedIndex].text);
+  const memo = ui.memo.value.trim();
+  const idempotencyKey = genId();
+
+  const payload = {
+    type: 'study-minutes-report',
+    minutes: convMin,
+    ts: new Date().toISOString(),
+    ua: navigator.userAgent,
+    source: 'offsite_llm',
+    judge: providerName,
+    idempotency_key: idempotencyKey,
+    raw_minutes: raw,
+    category_id: catId,
+    category_label: catLabel,
+    memo,
+    period: { start: ui.start.value||null, end: ui.end.value||null },
+  };
+
+  try{
+    isSubmitting = true;
+    ui.submitBtn.disabled = true; ui.submitBtn.textContent = '送信中…';
+    await fetch(CONFIG.GAS_ENDPOINT, { method:'POST', headers:{'Content-Type':'text/plain','X-Idempotency-Key': idempotencyKey}, body: JSON.stringify(payload), keepalive:true })
+      .catch(async ()=>{ await fetch(CONFIG.GAS_ENDPOINT, { method:'POST', mode:'no-cors', headers:{'X-Idempotency-Key': idempotencyKey}, body: JSON.stringify(payload), keepalive:true }); });
+    localStorage.setItem(todayKey, '1'); updateDailyLock();
+    setStatus(true, '送信完了'); log(`送信: ${convMin}分 を加算（${providerName}）`);
+    ui.submitBtn.textContent = '送信済み';
+  }catch(e){
+    setStatus(false, '送信失敗'); log('送信失敗: '+(e?.message||e)); alert('送信に失敗しました。ネットワーク状況をご確認ください。');
+    ui.submitBtn.disabled = false; ui.submitBtn.textContent = '送信（GASへ反映）';
+  } finally {
+    isSubmitting = false;
+  }
+});
+</script>
+</body>
+</html>
