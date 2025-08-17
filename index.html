@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>オフサイト勉強・審査フォーム</title>
+<title>オフサイト勉強・審査フォーム（Gemini）</title>
 <meta name="theme-color" content="#111111" />
 <style>
   :root { color-scheme: light dark; }
@@ -29,7 +29,6 @@
   details > summary { cursor: pointer; }
   .right { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
   .note { font-size: 12px; opacity: .85; }
-  .warn { color: #b51e1e; font-weight: 600; }
   .kv { display: grid; grid-template-columns: 160px 1fr; gap: 6px 10px; align-items: start; }
   @media (max-width: 520px){ .kv { grid-template-columns: 1fr; } }
   #todayLock { flex: 0 1 180px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; text-align: center; }
@@ -84,7 +83,11 @@
     <div class="right">
       <button id="estimateBtn">AI判定プレビュー</button>
     </div>
-    <div class="note">ポリシー: 家効率=1.00を基準にし、他の環境は常識的に減点。長時間は逓減。<br/>丸めは<strong>5分切り捨て</strong>、換算効率の上限<strong>0.95</strong>/下限<strong>0.30</strong>、1日1件。<br/>※ただし「明らかに勉強でない（YouTube/ゲーム/SNS等）」は<strong>0.01固定</strong>。</div>
+    <div class="note">
+      ポリシー: 家効率=1.00を基準にし、他環境は常識的に減点。長時間は逓減。<br/>
+      丸めは<strong>5分切り捨て</strong>、換算効率の上限<strong>0.95</strong>/下限<strong>0.30</strong>、1日1件。<br/>
+      ただし<strong>明確に非学習（YouTube/ゲーム/SNS等）</strong>は<strong>0.01固定</strong>。
+    </div>
   </section>
 
   <section class="card" aria-labelledby="sec-judge">
@@ -124,7 +127,7 @@ const CONFIG = {
   // === Gemini 2.5 Flash ===
   GEMINI: {
     URL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-    KEY: "AIzaSyAtRvepGwdAIH1vzsxOyxSATsp8v7A05aM" // 例: "AIzaSy...."
+    KEY: "YOUR_API_KEY_HERE" // ← あなたのAPIキーを入れる（直書きは非推奨）
   },
 
   LIMITS: { EFF_MIN: 0.30, EFF_MAX: 0.95 },
@@ -134,9 +137,9 @@ const CONFIG = {
   CONF_PENALTY: { THRESH: 0.60, PENALTY: 0.03 }, // 確信度が低い場合の微減点
   USER_FACTOR: { key: "offsite_user_k", init: 1.00, min: 0.90, max: 1.10 },
   HARD_NEG_PATTERNS: [
-    'ずっとyoutube', 'youtube 見てた', '動画見てた', 'tiktok', 'インスタ', 'instagram',
-    'x見てた', 'twitter', 'ゲームしてた', 'スマホいじってた', '遊んでた', 'だらだら',
-    'netflix', 'prime video', 'hulu', '配信見てた', '生配信', 'bilibili'
+    'ずっとyoutube','youtube 見てた','動画見てた','tiktok','インスタ','instagram',
+    'x見てた','twitter','ゲームしてた','スマホいじってた','遊んでた','だらだら',
+    'netflix','prime video','hulu','配信見てた','生配信','bilibili'
   ]
 };
 
@@ -155,13 +158,6 @@ const RUBRIC = {
   aspects: [
     "騒音/静音・混雑", "デジタル干渉(スマホ/通知)", "能動度(演習/復習/記述)", "姿勢/移動", "体調/疲労", "例外的に密度が高い学習(模試復習など)"
   ],
-  schema: {
-    efficiency: "0.30〜0.95の実数（家=1.00を超えない）。ただし明確に非学習なら0.01固定。",
-    confidence: "0.0〜1.0。曖昧/矛盾があると低下。",
-    subscores: { noise: "0〜1", phone_risk: "0〜1", task_active: "0〜1", crowding: "0〜1", fatigue: "0〜1" },
-    rationale: "日本語で端的に。",
-    flags: { contradiction: "bool", duration_implausible: "bool", needs_clarification: "bool" }
-  }
 };
 
 /**************** UI参照 ****************/
@@ -187,27 +183,55 @@ const ui = {
   rulesDump: document.getElementById('rulesDump'),
   log: document.getElementById('log'),
 };
-ui.rulesDump.textContent = `CONFIG = ${JSON.stringify({...CONFIG, GEMINI:{...CONFIG.GEMINI, KEY:"(masked)"}}, null, 2)}\n\nRUBRIC = ${JSON.stringify(RUBRIC, null, 2)}`;
+ui.rulesDump.textContent =
+  `CONFIG = ${JSON.stringify({...CONFIG, GEMINI:{...CONFIG.GEMINI, KEY:"(masked)"}}, null, 2)}\n\n` +
+  `RUBRIC = ${JSON.stringify(RUBRIC, null, 2)}}`;
 
 /**************** 日次制限（ローカル端末単位） ****************/
-const todayKey = (()=>{ const d=new Date(); const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return `offsiteSubmit:${yyyy}-${mm}-${dd}`; })();
-function updateDailyLock(){ const sent = Number(localStorage.getItem(todayKey) || 0); ui.todayLock.textContent = `本日送信: ${sent}/${CONFIG.DAILY_LIMIT}`; return sent; }
+const todayKey = (function(){
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return 'offsiteSubmit:' + yyyy + '-' + mm + '-' + dd;
+})();
+function updateDailyLock(){
+  const sent = Number(localStorage.getItem(todayKey) || 0);
+  ui.todayLock.textContent = '本日送信: ' + sent + '/' + CONFIG.DAILY_LIMIT;
+  return sent;
+}
 updateDailyLock();
 
 /**************** ユーティリティ ****************/
-function log(s){ ui.log.textContent = (ui.log.textContent==='—'?'':ui.log.textContent) + `[${new Date().toLocaleTimeString()}] ${s}\n`; }
-function setStatus(ok, text){ ui.status.textContent = text; ui.status.className = 'pill ' + (ok?'ok':'ng'); }
-function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
-function floorTo(n, step){ return Math.floor(n/step)*step; }
-function mmToHHMM(m){ const h=Math.floor(m/60); const mm=Math.floor(m%60); return `${h}時間${String(mm).padStart(2,'0')}分`; }
+function log(s){
+  ui.log.textContent =
+    (ui.log.textContent === '—' ? '' : ui.log.textContent) +
+    `[${new Date().toLocaleTimeString()}] ${s}\n`;
+}
+function setStatus(ok, text){
+  ui.status.textContent = text;
+  ui.status.className = 'pill ' + (ok ? 'ok' : 'ng');
+}
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function floorTo(n, step){ return Math.floor(n/step) * step; }
+function mmToHHMM(m){
+  const h = Math.floor(m / 60);
+  const mm = Math.floor(m % 60);
+  return `${h}時間${String(mm).padStart(2,'0')}分`;
+}
 function isHardNegative(text){
   const t = (text||'').toLowerCase();
   return CONFIG.HARD_NEG_PATTERNS.some(k => t.includes(k));
 }
 
 /**************** 個人補正 (k_user) ****************/
-function getUserFactor(){ const k = Number(localStorage.getItem(CONFIG.USER_FACTOR.key) || CONFIG.USER_FACTOR.init); return clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max); }
-function setUserFactor(k){ localStorage.setItem(CONFIG.USER_FACTOR.key, String(clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max))); }
+function getUserFactor(){
+  const k = Number(localStorage.getItem(CONFIG.USER_FACTOR.key) || CONFIG.USER_FACTOR.init);
+  return clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max);
+}
+function setUserFactor(k){
+  localStorage.setItem(CONFIG.USER_FACTOR.key, String(clamp(k, CONFIG.USER_FACTOR.min, CONFIG.USER_FACTOR.max)));
+}
 if (!localStorage.getItem(CONFIG.USER_FACTOR.key)) setUserFactor(CONFIG.USER_FACTOR.init);
 
 /**************** 入力補助（その他表示切替） ****************/
@@ -217,15 +241,26 @@ ui.category.addEventListener('change', ()=>{
 });
 
 /**************** ルールベース（フォールバック用） ****************/
-function judgeRule(category, rawMinutes, memo){
-  let eff = RUBRIC.baseByCategory[category] ?? RUBRIC.baseByCategory.other;
-  const text=(memo||'').toLowerCase();
-
-  // 明確に非学習 → 0.01固定
-  if (isHardNegative(text)) {
-    return { efficiency: 0.01, confidence: 0.95, subscores: {}, rationale: '非学習コンテンツ検出（0.01固定）', flags: {non_study:true} };
+function applyLongDecay(eff, rawMin){
+  const { THRESH_MIN, STEP_MIN, STEP_PENALTY } = CONFIG.LONG_DECAY;
+  if (rawMin > THRESH_MIN){
+    const extra = rawMin - THRESH_MIN;
+    const steps = Math.floor(extra / STEP_MIN);
+    eff -= steps * STEP_PENALTY;
+    eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
   }
-
+  return eff;
+}
+function judgeRule(category, rawMinutes, memo){
+  let eff = (RUBRIC.baseByCategory[category] ?? RUBRIC.baseByCategory.other);
+  const text=(memo||'').toLowerCase();
+  if (isHardNegative(text)) {
+    return {
+      efficiency: 0.01, confidence: 0.95,
+      subscores: {}, rationale: '非学習コンテンツ検出（0.01固定）',
+      flags: { non_study: true }
+    };
+  }
   const mods=[
     {keys:['静か','耳栓','ノイズキャンセリング','個室','自習室','仕切り'], d:+0.05},
     {keys:['満席','混雑','うるさい','騒音','雑音','子供'], d:-0.10},
@@ -242,24 +277,20 @@ function judgeRule(category, rawMinutes, memo){
   ];
   const reasons=[`カテゴリ基準=${eff.toFixed(2)}`];
   for (const m of mods){ if (m.keys.some(k=>text.includes(k.toLowerCase()))){ eff+=m.d; reasons.push(`${m.d>0?'+':''}${m.d.toFixed(2)}`); } }
-
   eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
   eff = applyLongDecay(eff, rawMinutes);
   return { efficiency: eff, confidence: 0.65, subscores: {}, rationale: reasons.join(' / '), flags: {} };
 }
 
-function applyLongDecay(eff, rawMin){
-  const { THRESH_MIN, STEP_MIN, STEP_PENALTY } = CONFIG.LONG_DECAY;
-  if (rawMin > THRESH_MIN){
-    const extra = rawMin - THRESH_MIN;
-    const steps = Math.floor(extra / STEP_MIN);
-    eff -= steps * STEP_PENALTY;
-    eff = clamp(eff, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
-  }
-  return eff;
+/**************** JSONパース補助 ****************/
+function parseMaybeJSON(t){
+  if (!t) return null;
+  let s = String(t).trim();
+  if (s.startsWith('```')){ s = s.replace(/^```json/,'').replace(/^```/,'').replace(/```$/,'').trim(); }
+  try { return JSON.parse(s); } catch { return null; }
 }
 
-/**************** Gemini判定（JSON強制・inlineData対応・安全ブロック表示・堅牢パース） ****************/
+/**************** Gemini判定（JSON強制＆再試行） ****************/
 async function judgeGemini(payload){
   ui.providerPill.textContent = '判定: Gemini 準備中';
 
@@ -267,104 +298,204 @@ async function judgeGemini(payload){
     category_id: payload.category_id,
     category_label: payload.category_label,
     raw_minutes: payload.raw_minutes,
-    start: payload.start,
-    end: payload.end,
+    start: payload.start, end: payload.end,
     memo: payload.memo
   });
 
-  const systemText =
-`あなたは厳格な勉強効率の審査員です。家=1.00、他環境は0.30〜0.95で常識的に採点。
-明確に勉強ではない活動（YouTube/ゲーム/SNS/配信視聴など）が主なら効率は0.01に固定。
-長時間は逓減：${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下。
-必ず次のJSONのみを出力：{"efficiency":number,"confidence":number,"subscores":{"noise":number,"phone_risk":number,"task_active":number,"crowding":number,"fatigue":number},"rationale":string,"flags":{"contradiction":boolean,"duration_implausible":boolean,"needs_clarification":boolean}}
-余計な文章、コードブロック、Markdownは禁止。`;
+  // 1回目：フラットJSON
+  const systemFlat =
+`家=1.00。他環境効率=0.30..0.95。非学習(YouTube/ゲーム/SNS/配信視聴など)は効率0.01固定。
+長時間逓減: ${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下。
+出力は1行のJSONのみ(フラット・ネストなし)。キー: efficiency, confidence, noise, phone_risk, task_active, crowding, fatigue, rationale, contradiction, duration_implausible, needs_clarification。
+余計な文字・説明・改行は禁止。`;
 
-  // v1beta generateContent 形式（systemInstructionを分離）
-  const body = {
-    systemInstruction: { parts: [{ text: systemText }] },
+  const body1 = {
+    systemInstruction: { parts: [{ text: systemFlat }] },
     contents: [{ role: 'user', parts: [{ text: userJson }]}],
     generationConfig: {
       temperature: 0.0,
-      maxOutputTokens: 256,
-      responseMimeType: "application/json"   // ★JSON出力を強制
-      // responseSchema は一部モデルで400になり得るのでまずは未指定で安定化
+      maxOutputTokens: 128,
+      responseMimeType: "application/json",
+      responseSchema: {
+        "type": "object",
+        "properties": {
+          "efficiency": { "type": "number" },
+          "confidence": { "type": "number" },
+          "noise": { "type": "number" },
+          "phone_risk": { "type": "number" },
+          "task_active": { "type": "number" },
+          "crowding": { "type": "number" },
+          "fatigue": { "type": "number" },
+          "rationale": { "type": "string" },
+          "contradiction": { "type": "boolean" },
+          "duration_implausible": { "type": "boolean" },
+          "needs_clarification": { "type": "boolean" }
+        },
+        "required": ["efficiency","confidence","noise","phone_risk","task_active","crowding","fatigue","rationale","contradiction","duration_implausible","needs_clarification"]
+      }
     }
   };
 
-  async function callGemini(){
+  async function callGemini(body){
     const res = await fetch(`${CONFIG.GEMINI.URL}?key=${encodeURIComponent(CONFIG.GEMINI.KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify(body)
+      method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body)
     });
     if (!res.ok) {
-      // 400/403/429などは本文もログに出す
       const t = await res.text().catch(()=> '');
       throw new Error(`HTTP ${res.status}${t ? ' | ' + t.slice(0,200) : ''}`);
     }
     return res.json();
   }
 
+  function ensureStopOrThrow(cand, tag=''){
+    const fr = cand?.finishReason;
+    if (fr && fr !== 'STOP'){
+      log(`Gemini finishReason${tag? ' '+tag:''}: ${fr}（再試行へ）`);
+      throw new Error(`finish_not_stop:${fr}`);
+    }
+  }
+
   try{
-    log('Geminiへ判定リクエスト（JSON強制・inlineData対応）');
-    const data = await callGemini();
+    log('Geminiへ判定リクエスト（1回目）');
+    let data = await callGemini(body1);
+    let cand = data?.candidates?.[0];
 
-    // --- 安全ブロックなどのメタ情報を拾っておく（デバッグに有用） ---
-    const pf = data?.promptFeedback;
-    const cand = data?.candidates?.[0];
-    const finish = cand?.finishReason;
-    if (pf?.blockReason) {
-      log(`Gemini安全ブロック: ${pf.blockReason}`);
-    }
-    if (finish && finish !== 'STOP') {
-      log(`Gemini finishReason: ${finish}`);
-    }
+    ensureStopOrThrow(cand, '(1st)');
 
-    // --- 応答本文の取り出し：text だけでなく inlineData(JSON) も見る ---
     let text = '';
     const parts = cand?.content?.parts || [];
     for (const p of parts){
-      if (typeof p.text === 'string' && p.text.trim()){
-        text = p.text.trim();
-        break;
-      }
-      // application/json が base64 で来るパターン
+      if (typeof p.text === 'string' && p.text.trim()){ text = p.text.trim(); break; }
       if (p.inlineData?.mimeType?.includes('json') && p.inlineData?.data){
-        text = base64JsonToText(p.inlineData.data);  // ★新規補助関数
-        break;
+        text = atob(p.inlineData.data); break;
       }
     }
 
-    // --- 堅牢パース：素直なJSON → ```囲い → 本文から{...}抽出 → candidates全体から抽出 ---
-    let parsed = parseMaybeJSON(text) || extractFirstJSON(text);
-    if (!parsed && typeof data === 'object') {
-      parsed = extractFirstJSON(JSON.stringify(data));
-    }
+    let parsed = parseMaybeJSON(text);
+    if (!parsed) { throw new Error('json_parse_fail_first'); }
 
-    if (parsed && typeof parsed.efficiency === 'number') {
+    ui.providerPill.textContent = '判定: Gemini';
+    return normalizeGeminiResult(parsed);
+
+  }catch(firstErr){
+    // 2回目：ネストJSON
+    log('Gemini再試行（ネストJSON, maxOutputTokens=256）');
+    const systemNested =
+`家=1.00。他環境効率=0.30..0.95。非学習(YouTube/ゲーム/SNS/配信視聴など)は効率0.01固定。
+長時間逓減: ${CONFIG.LONG_DECAY.THRESH_MIN}分超は${CONFIG.LONG_DECAY.STEP_MIN}分ごとに${CONFIG.LONG_DECAY.STEP_PENALTY}低下。
+出力は次のJSONのみ(説明禁止)。{"efficiency":number,"confidence":number,"subscores":{"noise":number,"phone_risk":number,"task_active":number,"crowding":number,"fatigue":number},"rationale":string,"flags":{"contradiction":boolean,"duration_implausible":boolean,"needs_clarification":boolean}}`;
+
+    const body2 = {
+      systemInstruction: { parts: [{ text: systemNested }] },
+      contents: [{ role: 'user', parts: [{ text: userJson }]}],
+      generationConfig: {
+        temperature: 0.0,
+        maxOutputTokens: 256,
+        responseMimeType: "application/json",
+        responseSchema: {
+          "type":"object",
+          "properties":{
+            "efficiency":{"type":"number"},
+            "confidence":{"type":"number"},
+            "subscores":{
+              "type":"object",
+              "properties":{
+                "noise":{"type":"number"},
+                "phone_risk":{"type":"number"},
+                "task_active":{"type":"number"},
+                "crowding":{"type":"number"},
+                "fatigue":{"type":"number"}
+              },
+              "required":["noise","phone_risk","task_active","crowding","fatigue"]
+            },
+            "rationale":{"type":"string"},
+            "flags":{
+              "type":"object",
+              "properties":{
+                "contradiction":{"type":"boolean"},
+                "duration_implausible":{"type":"boolean"},
+                "needs_clarification":{"type":"boolean"}
+              },
+              "required":["contradiction","duration_implausible","needs_clarification"]
+            }
+          },
+          "required":["efficiency","confidence","subscores","rationale","flags"]
+        }
+      }
+    };
+
+    try{
+      const data2 = await callGemini(body2);
+      const cand2 = data2?.candidates?.[0];
+
+      ensureStopOrThrow(cand2, '(2nd)');
+
+      let text2 = '';
+      const parts2 = cand2?.content?.parts || [];
+      for (const p of parts2){
+        if (typeof p.text === 'string' && p.text.trim()){ text2 = p.text.trim(); break; }
+        if (p.inlineData?.mimeType?.includes('json') && p.inlineData?.data){
+          text2 = atob(p.inlineData.data); break;
+        }
+      }
+      const parsed2 = parseMaybeJSON(text2);
+      if (!parsed2) { throw new Error('json_parse_fail_second'); }
+
       ui.providerPill.textContent = '判定: Gemini';
-      return parsed;
-    }
+      return normalizeGeminiResult(parsed2);
 
-    // ここまで来たらJSONを得られていない
-    throw new Error('Gemini応答がJSONでない');
-  }catch(e){
-    log('Gemini判定失敗: '+(e?.message||e));
-    ui.providerPill.textContent = '判定: ルール（フォールバック）';
-    return judgeRule(payload.category_id, payload.raw_minutes, payload.memo || '');
+    }catch(secondErr){
+      // 最終フォールバック：ルール判定
+      log('Gemini判定失敗: '+(secondErr?.message||secondErr));
+      ui.providerPill.textContent = '判定: ルール（フォールバック）';
+      return judgeRule(payload.category_id, payload.raw_minutes, payload.memo || '');
+    }
   }
 }
 
-/********** base64(JSON) → UTF-8文字列（inlineData用） **********/
-function base64JsonToText(b64){
-  try{
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder('utf-8', {fatal:false}).decode(bytes);
-  }catch(_){ return ''; }
+/************ Gemini→内部形式 正規化（フラット/ネスト両対応） ************/
+function normalizeGeminiResult(js){
+  // フラット形式
+  if ('noise' in js || 'contradiction' in js){
+    return {
+      efficiency: Number(js.efficiency),
+      confidence: Number(js.confidence),
+      rationale: js.rationale || '',
+      subscores: {
+        noise: Number(js.noise),
+        phone_risk: Number(js.phone_risk),
+        task_active: Number(js.task_active),
+        crowding: Number(js.crowding),
+        fatigue: Number(js.fatigue),
+      },
+      flags: {
+        contradiction: !!js.contradiction,
+        duration_implausible: !!js.duration_implausible,
+        needs_clarification: !!js.needs_clarification,
+      }
+    };
+  }
+  // ネスト形式
+  const subs = js.subscores || {};
+  const flg = js.flags || {};
+  return {
+    efficiency: Number(js.efficiency),
+    confidence: Number(js.confidence),
+    rationale: js.rationale || '',
+    subscores: {
+      noise: Number(subs.noise),
+      phone_risk: Number(subs.phone_risk),
+      task_active: Number(subs.task_active),
+      crowding: Number(subs.crowding),
+      fatigue: Number(subs.fatigue),
+    },
+    flags: {
+      contradiction: !!flg.contradiction,
+      duration_implausible: !!flg.duration_implausible,
+      needs_clarification: !!flg.needs_clarification,
+    }
+  };
 }
-
 
 /**************** プレビュー ****************/
 ui.estimateBtn.addEventListener('click', async ()=>{
@@ -380,19 +511,17 @@ ui.estimateBtn.addEventListener('click', async ()=>{
 
   let result = await judgeGemini(payload);
 
-  // クリップと逓減（最終防衛）
+  // 非学習強制
   const hardBad = isHardNegative(memo);
   let eff = Number(result.efficiency||0);
-  if (hardBad) eff = Math.max(0.01, Math.min(0.10, eff || 0.01));  // 非学習は0.01〜0.10、基本0.01
+  if (hardBad) eff = Math.max(0.01, Math.min(0.10, eff || 0.01));
   eff = clamp(eff, hardBad ? 0.01 : CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
   eff = applyLongDecay(eff, raw);
 
-  // 確信度ペナルティ
   const conf = Number(result.confidence||0);
   if (!hardBad && isFinite(conf) && conf < CONFIG.CONF_PENALTY.THRESH){
     eff = clamp(eff - CONFIG.CONF_PENALTY.PENALTY, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
   }
-  // 個人補正
   const k = getUserFactor();
   if (!hardBad) eff = clamp(eff * k, CONFIG.LIMITS.EFF_MIN, CONFIG.LIMITS.EFF_MAX);
 
@@ -403,8 +532,11 @@ ui.estimateBtn.addEventListener('click', async ()=>{
   ui.conf.textContent = (isFinite(conf)? conf.toFixed(2) : '—');
   ui.conv.textContent = `${converted} 分（${mmToHHMM(converted)}）`;
   ui.rationale.textContent = result.rationale || (hardBad ? '非学習コンテンツ扱い（0.01固定）' : '—');
-  const subs = result.subscores || {}; ui.subs.textContent = Object.keys(subs).length? JSON.stringify(subs) : '—';
-  const flags = result.flags || {}; ui.flags.textContent = Object.keys(flags).length? JSON.stringify(flags) : '—';
+
+  const subs = result.subscores || {};
+  const flags = result.flags || {};
+  ui.subs.textContent = Object.keys(subs).length? JSON.stringify(subs) : '—';
+  ui.flags.textContent = Object.keys(flags).length? JSON.stringify(flags) : '—';
   ui.provider.textContent = (ui.providerPill.textContent.includes('Gemini')?'gemini':'rule');
 
   ui.submitBtn.disabled = false; setStatus(true, '判定OK（未送信）');
@@ -417,16 +549,17 @@ function genId(){
   if (window.crypto?.randomUUID) return crypto.randomUUID();
   return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8);
 }
-
 ui.submitBtn.addEventListener('click', async ()=>{
   if (isSubmitting) { log('重複送信ブロック'); return; }
   if (updateDailyLock() >= CONFIG.DAILY_LIMIT){ alert('本日は既に送信されています（1日1件まで）'); return; }
 
-  const convText = ui.conv.textContent; const convMin = Number((convText.match(/^(\d+)/)||[])[1]||0);
+  const convText = ui.conv.textContent;
+  const convMin = Number((convText.match(/^(\d+)/)||[])[1]||0);
   if (!convMin){ alert('先に「AI判定プレビュー」を行ってください'); return; }
 
   const raw = Number(ui.rawMinutes.value||0);
-  const catId = ui.category.value; const catLabel = (catId==='other' ? (ui.categoryOther.value.trim()||'その他') : ui.category.options[ui.category.selectedIndex].text);
+  const catId = ui.category.value;
+  const catLabel = (catId==='other' ? (ui.categoryOther.value.trim()||'その他') : ui.category.options[ui.category.selectedIndex].text);
   const memo = ui.memo.value.trim();
   const idempotencyKey = genId();
 
@@ -460,7 +593,8 @@ ui.submitBtn.addEventListener('click', async ()=>{
     setStatus(true, '送信完了'); log(`送信: ${convMin}分 を加算（${ui.provider.textContent}）`);
     ui.submitBtn.textContent = '送信済み';
   }catch(e){
-    setStatus(false, '送信失敗'); log('送信失敗: '+(e?.message||e)); alert('送信に失敗しました。ネットワーク状況をご確認ください。');
+    setStatus(false, '送信失敗'); log('送信失敗: '+(e?.message||e));
+    alert('送信に失敗しました。ネットワーク状況をご確認ください。');
     ui.submitBtn.disabled = false; ui.submitBtn.textContent = '送信（GASへ反映）';
   } finally {
     isSubmitting = false;
